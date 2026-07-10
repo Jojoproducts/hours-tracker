@@ -1,0 +1,31 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // one profile doc per user, holding their role
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      // only an admin can change roles (prevents users promoting themselves)
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // one doc per logged activity
+    match /entries/{entryId} {
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+  }
+}

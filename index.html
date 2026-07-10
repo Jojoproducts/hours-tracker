@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hours Tracker</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <span class="brand">Hours Tracker</span>
+    <div id="userBox" class="hidden">
+      <span id="userEmail"></span>
+      <button id="logoutBtn" class="ghost-btn">Log out</button>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- AUTH SCREEN -->
+    <section id="authScreen" class="card auth-card">
+      <h1 id="authTitle">Log in</h1>
+      <form id="authForm">
+        <label>
+          Email
+          <input type="email" id="authEmail" required autocomplete="email" />
+        </label>
+        <label>
+          Password
+          <input type="password" id="authPassword" required autocomplete="current-password" minlength="6" />
+        </label>
+        <p id="authError" class="error hidden"></p>
+        <button type="submit" id="authSubmit" class="primary-btn">Log in</button>
+      </form>
+      <p class="switch-line">
+        <span id="switchText">Don't have an account?</span>
+        <button id="switchModeBtn" class="link-btn">Sign up</button>
+      </p>
+    </section>
+
+    <!-- APP SCREEN (shown once logged in) -->
+    <section id="appScreen" class="hidden">
+
+      <section class="card">
+        <h2>Log an activity</h2>
+        <form id="entryForm">
+          <label>
+            Activity
+            <input type="text" id="entryActivity" placeholder="e.g. Client onboarding call" required />
+          </label>
+          <div class="row">
+            <label>
+              Hours
+              <input type="number" id="entryHours" min="0.25" step="0.25" required />
+            </label>
+            <label>
+              Date
+              <input type="date" id="entryDate" required />
+            </label>
+          </div>
+          <button type="submit" class="primary-btn">Add entry</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Your entries</h2>
+          <span id="myTotal" class="total-pill">0 h total</span>
+        </div>
+        <table class="entries-table">
+          <thead>
+            <tr><th>Date</th><th>Activity</th><th>Hours</th><th></th></tr>
+          </thead>
+          <tbody id="myEntriesBody">
+            <tr><td colspan="4" class="empty-row">No entries yet.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ADMIN ONLY -->
+      <section id="adminSection" class="card hidden">
+        <div class="section-header">
+          <h2>All entries (admin)</h2>
+          <span id="orgTotal" class="total-pill">0 h total</span>
+        </div>
+        <div id="adminByUser"></div>
+      </section>
+
+    </section>
+
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
