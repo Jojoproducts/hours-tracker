@@ -27,6 +27,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  updateDoc,
   collection,
   addDoc,
   deleteDoc,
@@ -66,6 +67,7 @@ const entryDate = document.getElementById("entryDate");
 
 const myEntriesBody = document.getElementById("myEntriesBody");
 const myTotal = document.getElementById("myTotal");
+const myEntriesError = document.getElementById("myEntriesError");
 
 const adminSection = document.getElementById("adminSection");
 const adminByUser = document.getElementById("adminByUser");
@@ -74,6 +76,11 @@ const orgTotal = document.getElementById("orgTotal");
 let isSignUpMode = false;
 let unsubMyEntries = null;
 let unsubAllEntries = null;
+
+// cache of my own entries (kept client-side so we can re-render
+// instantly on edit/cancel without waiting for a new snapshot)
+let myEntriesCache = [];
+let editingEntryId = null;
 
 // default the date field to today
 entryDate.valueAsDate = new Date();
@@ -135,6 +142,8 @@ onAuthStateChanged(auth, async (user) => {
   // clear any previous listeners when auth state changes
   if (unsubMyEntries) { unsubMyEntries(); unsubMyEntries = null; }
   if (unsubAllEntries) { unsubAllEntries(); unsubAllEntries = null; }
+  myEntriesCache = [];
+  editingEntryId = null;
 
   if (user) {
     authScreen.classList.add("hidden");
@@ -183,39 +192,113 @@ entryForm.addEventListener("submit", async (e) => {
 
 // ─────────────────────────────────────────────────────────────
 // 7. Live view: my own entries
+//
+// NOTE: this query only uses `where`, with NO `orderBy`. Combining
+// where + orderBy on different fields requires a Firestore composite
+// index to be created manually in the console — if that index isn't
+// there, the query fails silently and the table just looks empty
+// forever. Sorting on the client instead sidesteps that entirely.
 // ─────────────────────────────────────────────────────────────
 function watchMyEntries(user) {
-  const q = query(
-    collection(db, "entries"),
-    where("uid", "==", user.uid),
-    orderBy("date", "desc")
-  );
+  const q = query(collection(db, "entries"), where("uid", "==", user.uid));
 
-  unsubMyEntries = onSnapshot(q, (snap) => {
-    if (snap.empty) {
-      myEntriesBody.innerHTML = `<tr><td colspan="4" class="empty-row">No entries yet.</td></tr>`;
-      myTotal.textContent = "0 h total";
-      return;
+  unsubMyEntries = onSnapshot(
+    q,
+    (snap) => {
+      myEntriesError.classList.add("hidden");
+      myEntriesCache = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      myEntriesCache.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+      renderMyEntries();
+    },
+    (err) => {
+      console.error("my entries listener error:", err);
+      myEntriesError.textContent = "Couldn't load your entries (" + err.code + "). Try refreshing.";
+      myEntriesError.classList.remove("hidden");
     }
+  );
+}
 
-    let total = 0;
-    myEntriesBody.innerHTML = "";
-    snap.forEach((docSnap) => {
-      const e = docSnap.data();
-      total += e.hours;
-      const tr = document.createElement("tr");
+function renderMyEntries() {
+  if (myEntriesCache.length === 0) {
+    myEntriesBody.innerHTML = `<tr><td colspan="4" class="empty-row">No entries yet.</td></tr>`;
+    myTotal.textContent = "0 h total";
+    return;
+  }
+
+  let total = 0;
+  myEntriesBody.innerHTML = "";
+
+  myEntriesCache.forEach((e) => {
+    total += e.hours;
+    const tr = document.createElement("tr");
+
+    if (e.id === editingEntryId) {
+      tr.innerHTML = `
+        <td><input type="date" class="inline-input" data-field="date" value="${e.date}" /></td>
+        <td><input type="text" class="inline-input" data-field="activity" value="${escapeAttr(e.activity)}" /></td>
+        <td><input type="number" class="inline-input inline-input-hours" data-field="hours" min="0.25" step="0.25" value="${e.hours}" /></td>
+        <td class="row-actions">
+          <button class="save-btn" data-id="${e.id}">Save</button>
+          <button class="cancel-btn" data-id="${e.id}">Cancel</button>
+        </td>
+      `;
+    } else {
       tr.innerHTML = `
         <td>${e.date}</td>
         <td>${escapeHtml(e.activity)}</td>
         <td>${e.hours}</td>
-        <td><button class="delete-btn" data-id="${docSnap.id}">Delete</button></td>
+        <td class="row-actions">
+          <button class="edit-btn" data-id="${e.id}">Edit</button>
+          <button class="delete-btn" data-id="${e.id}">Delete</button>
+        </td>
       `;
-      myEntriesBody.appendChild(tr);
-    });
-    myTotal.textContent = `${total} h total`;
+    }
 
-    myEntriesBody.querySelectorAll(".delete-btn").forEach((btn) => {
-      btn.addEventListener("click", () => deleteDoc(doc(db, "entries", btn.dataset.id)));
+    myEntriesBody.appendChild(tr);
+  });
+
+  myTotal.textContent = `${total} h total`;
+
+  myEntriesBody.querySelectorAll(".edit-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      editingEntryId = btn.dataset.id;
+      renderMyEntries();
+    });
+  });
+
+  myEntriesBody.querySelectorAll(".cancel-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      editingEntryId = null;
+      renderMyEntries();
+    });
+  });
+
+  myEntriesBody.querySelectorAll(".delete-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (confirm("Delete this entry?")) {
+        deleteDoc(doc(db, "entries", btn.dataset.id));
+      }
+    });
+  });
+
+  myEntriesBody.querySelectorAll(".save-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest("tr");
+      const date = row.querySelector('[data-field="date"]').value;
+      const activity = row.querySelector('[data-field="activity"]').value.trim();
+      const hours = parseFloat(row.querySelector('[data-field="hours"]').value);
+
+      if (!date || !activity || !hours || hours <= 0) {
+        alert("Please fill in a valid date, activity, and hours.");
+        return;
+      }
+
+      await updateDoc(doc(db, "entries", btn.dataset.id), { date, activity, hours });
+      editingEntryId = null;
+      // renderMyEntries() also runs automatically once the snapshot
+      // listener picks up the update; calling it here too just makes
+      // the UI feel instant instead of waiting on the round trip.
+      renderMyEntries();
     });
   });
 }
@@ -227,44 +310,54 @@ function watchMyEntries(user) {
 function watchAllEntries() {
   const q = query(collection(db, "entries"), orderBy("date", "desc"));
 
-  unsubAllEntries = onSnapshot(q, (snap) => {
-    const byUser = {};
-    let grandTotal = 0;
+  unsubAllEntries = onSnapshot(
+    q,
+    (snap) => {
+      const byUser = {};
+      let grandTotal = 0;
 
-    snap.forEach((docSnap) => {
-      const e = docSnap.data();
-      grandTotal += e.hours;
-      if (!byUser[e.userEmail]) byUser[e.userEmail] = { total: 0, entries: [] };
-      byUser[e.userEmail].total += e.hours;
-      byUser[e.userEmail].entries.push(e);
-    });
+      snap.forEach((docSnap) => {
+        const e = docSnap.data();
+        grandTotal += e.hours;
+        if (!byUser[e.userEmail]) byUser[e.userEmail] = { total: 0, entries: [] };
+        byUser[e.userEmail].total += e.hours;
+        byUser[e.userEmail].entries.push(e);
+      });
 
-    orgTotal.textContent = `${grandTotal} h total`;
+      orgTotal.textContent = `${grandTotal} h total`;
 
-    adminByUser.innerHTML = "";
-    Object.keys(byUser).sort().forEach((email) => {
-      const block = document.createElement("div");
-      block.className = "admin-user-block";
-      const rows = byUser[email].entries
-        .map((e) => `<tr><td>${e.date}</td><td>${escapeHtml(e.activity)}</td><td>${e.hours}</td></tr>`)
-        .join("");
-      block.innerHTML = `
-        <h3>${email} <span class="sub-total">${byUser[email].total} h</span></h3>
-        <table class="entries-table">
-          <thead><tr><th>Date</th><th>Activity</th><th>Hours</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      `;
-      adminByUser.appendChild(block);
-    });
-  });
+      adminByUser.innerHTML = "";
+      Object.keys(byUser).sort().forEach((email) => {
+        const block = document.createElement("div");
+        block.className = "admin-user-block";
+        const rows = byUser[email].entries
+          .map((e) => `<tr><td>${e.date}</td><td>${escapeHtml(e.activity)}</td><td>${e.hours}</td></tr>`)
+          .join("");
+        block.innerHTML = `
+          <h3>${email} <span class="sub-total">${byUser[email].total} h</span></h3>
+          <table class="entries-table">
+            <thead><tr><th>Date</th><th>Activity</th><th>Hours</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+        adminByUser.appendChild(block);
+      });
+    },
+    (err) => {
+      console.error("admin entries listener error:", err);
+    }
+  );
 }
 
 // ─────────────────────────────────────────────────────────────
-// 9. Small helper
+// 9. Small helpers
 // ─────────────────────────────────────────────────────────────
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }

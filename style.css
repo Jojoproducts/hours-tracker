@@ -184,12 +184,40 @@ input:focus {
 
 .empty-row { color: var(--muted); text-align: center; padding: 16px 0; }
 
-.delete-btn {
+.row-actions {
+  display: flex;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.delete-btn,
+.edit-btn,
+.save-btn,
+.cancel-btn {
   background: none;
   border: none;
-  color: var(--danger);
   cursor: pointer;
   font-size: 0.85rem;
+  padding: 0;
+  font-weight: 600;
+}
+
+.delete-btn { color: var(--danger); }
+.edit-btn { color: var(--accent); }
+.save-btn { color: var(--accent); }
+.cancel-btn { color: var(--muted); }
+
+.inline-input {
+  font-size: 0.9rem;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  width: 100%;
+  font-family: inherit;
+}
+
+.inline-input-hours {
+  width: 70px;
 }
 
 .admin-user-block {
