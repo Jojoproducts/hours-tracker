@@ -27,6 +27,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
   updateDoc,
   collection,
   addDoc,
@@ -61,13 +62,20 @@ const switchModeBtn = document.getElementById("switchModeBtn");
 const switchText = document.getElementById("switchText");
 
 const entryForm = document.getElementById("entryForm");
-const entryActivity = document.getElementById("entryActivity");
-const entryHours = document.getElementById("entryHours");
 const entryDate = document.getElementById("entryDate");
+const entryStart = document.getElementById("entryStart");
+const entryEnd = document.getElementById("entryEnd");
+const entryBreaks = document.getElementById("entryBreaks");
+const entryActivity = document.getElementById("entryActivity");
 
 const myEntriesBody = document.getElementById("myEntriesBody");
 const myTotal = document.getElementById("myTotal");
 const myEntriesError = document.getElementById("myEntriesError");
+
+const downloadMonth = document.getElementById("downloadMonth");
+const downloadUserLabel = document.getElementById("downloadUserLabel");
+const downloadUser = document.getElementById("downloadUser");
+const downloadBtn = document.getElementById("downloadBtn");
 
 const adminSection = document.getElementById("adminSection");
 const adminByUser = document.getElementById("adminByUser");
@@ -81,6 +89,7 @@ let unsubAllEntries = null;
 // instantly on edit/cancel without waiting for a new snapshot)
 let myEntriesCache = [];
 let editingEntryId = null;
+let allUsers = [];
 
 // default the date field to today
 entryDate.valueAsDate = new Date();
@@ -152,14 +161,18 @@ onAuthStateChanged(auth, async (user) => {
     userEmailLabel.textContent = user.email;
 
     watchMyEntries(user);
+    setupDownloadControls(user);
 
     const profileSnap = await getDoc(doc(db, "users", user.uid));
     const role = profileSnap.exists() ? profileSnap.data().role : "user";
     if (role === "admin") {
       adminSection.classList.remove("hidden");
       watchAllEntries();
+      populateAdminUsers();
+      downloadUserLabel.classList.remove("hidden");
     } else {
       adminSection.classList.add("hidden");
+      downloadUserLabel.classList.add("hidden");
     }
   } else {
     authScreen.classList.remove("hidden");
@@ -177,17 +190,51 @@ entryForm.addEventListener("submit", async (e) => {
   const user = auth.currentUser;
   if (!user) return;
 
+  const date = entryDate.value;
+  const start = entryStart.value.trim();
+  const end = entryEnd.value.trim();
+  const breaks = parseInt(entryBreaks.value, 10) || 0;
+  const activity = entryActivity.value.trim();
+
+  if (!date) {
+    alert("Please choose a date for your entry.");
+    return;
+  }
+
+  if (!start || !end) {
+    alert("Please enter both start and end time.");
+    return;
+  }
+
+  if (!activity) {
+    alert("Please describe the activity.");
+    return;
+  }
+
+  const parsedStart = parseFlexibleTime(start);
+  const parsedEnd = parseFlexibleTime(end);
+  if (parsedStart == null || parsedEnd == null) {
+    alert("Please enter valid start and end times. Use 14, 14:00, or 14.5.");
+    return;
+  }
+
+  const hours = computeWorkedHours(parsedStart, parsedEnd, breaks);
+
   await addDoc(collection(db, "entries"), {
     uid: user.uid,
     userEmail: user.email,
-    activity: entryActivity.value.trim(),
-    hours: parseFloat(entryHours.value),
-    date: entryDate.value, // stored as "YYYY-MM-DD" string, sorts fine lexicographically
+    date,
+    start,
+    end,
+    breaks,
+    activity,
+    hours,
     createdAt: serverTimestamp(),
   });
 
   entryForm.reset();
   entryDate.valueAsDate = new Date();
+  entryBreaks.value = 0;
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -220,7 +267,7 @@ function watchMyEntries(user) {
 
 function renderMyEntries() {
   if (myEntriesCache.length === 0) {
-    myEntriesBody.innerHTML = `<tr><td colspan="4" class="empty-row">No entries yet.</td></tr>`;
+    myEntriesBody.innerHTML = `<tr><td colspan="8" class="empty-row">No entries yet.</td></tr>`;
     myTotal.textContent = "0 h total";
     return;
   }
@@ -229,14 +276,19 @@ function renderMyEntries() {
   myEntriesBody.innerHTML = "";
 
   myEntriesCache.forEach((e) => {
-    total += e.hours;
+    total += e.hours || 0;
     const tr = document.createElement("tr");
+    const activity = e.activity || "";
+    const breaks = Number(e.breaks) || 0;
 
     if (e.id === editingEntryId) {
       tr.innerHTML = `
-        <td><input type="date" class="inline-input" data-field="date" value="${e.date}" /></td>
-        <td><input type="text" class="inline-input" data-field="activity" value="${escapeAttr(e.activity)}" /></td>
-        <td><input type="number" class="inline-input inline-input-hours" data-field="hours" min="0.25" step="0.25" value="${e.hours}" /></td>
+            <td><input type="date" class="inline-input" data-field="date" value="${e.date}" /></td>
+        <td><input type="text" class="inline-input" data-field="start" placeholder="14 or 14:00" value="${e.start || ""}" /></td>
+        <td><input type="text" class="inline-input" data-field="end" placeholder="18 or 18:30" value="${e.end || ""}" /></td>
+        <td><input type="number" class="inline-input inline-input-hours" data-field="breaks" value="${breaks}" /></td>
+        <td>${formatHours(e.hours || 0)}</td>
+        <td><input type="text" class="inline-input" data-field="activity" value="${escapeAttr(activity)}" /></td>
         <td class="row-actions">
           <button class="save-btn" data-id="${e.id}">Save</button>
           <button class="cancel-btn" data-id="${e.id}">Cancel</button>
@@ -245,8 +297,11 @@ function renderMyEntries() {
     } else {
       tr.innerHTML = `
         <td>${e.date}</td>
-        <td>${escapeHtml(e.activity)}</td>
-        <td>${e.hours}</td>
+        <td>${e.start || "-"}</td>
+        <td>${e.end || "-"}</td>
+        <td>${breaks} min</td>
+        <td>${formatHours(e.hours || 0)}</td>
+        <td>${escapeHtml(activity)}</td>
         <td class="row-actions">
           <button class="edit-btn" data-id="${e.id}">Edit</button>
           <button class="delete-btn" data-id="${e.id}">Delete</button>
@@ -257,7 +312,7 @@ function renderMyEntries() {
     myEntriesBody.appendChild(tr);
   });
 
-  myTotal.textContent = `${total} h total`;
+  myTotal.textContent = `${formatHours(total)} h total`;
 
   myEntriesBody.querySelectorAll(".edit-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -285,22 +340,151 @@ function renderMyEntries() {
     btn.addEventListener("click", async () => {
       const row = btn.closest("tr");
       const date = row.querySelector('[data-field="date"]').value;
+      const start = row.querySelector('[data-field="start"]').value.trim();
+      const end = row.querySelector('[data-field="end"]').value.trim();
+      const breaks = parseInt(row.querySelector('[data-field="breaks"]').value, 10) || 0;
       const activity = row.querySelector('[data-field="activity"]').value.trim();
-      const hours = parseFloat(row.querySelector('[data-field="hours"]').value);
+      const parsedStart = parseFlexibleTime(start);
+      const parsedEnd = parseFlexibleTime(end);
 
-      if (!date || !activity || !hours || hours <= 0) {
-        alert("Please fill in a valid date, activity, and hours.");
+      if (!date) {
+        alert("Please choose a date for your entry.");
         return;
       }
 
-      await updateDoc(doc(db, "entries", btn.dataset.id), { date, activity, hours });
+      if (!start || !end) {
+        alert("Please enter both start and end time.");
+        return;
+      }
+
+      if (!activity) {
+        alert("Please describe the activity.");
+        return;
+      }
+
+      if (parsedStart == null || parsedEnd == null) {
+        alert("Please enter valid start and end times. Use 14, 14:00, or 14.5.");
+        return;
+      }
+
+      const hours = computeWorkedHours(parsedStart, parsedEnd, breaks);
+
+      await updateDoc(doc(db, "entries", btn.dataset.id), {
+        date,
+        start: parsedStart,
+        end: parsedEnd,
+        breaks,
+        activity,
+        hours,
+      });
       editingEntryId = null;
-      // renderMyEntries() also runs automatically once the snapshot
-      // listener picks up the update; calling it here too just makes
-      // the UI feel instant instead of waiting on the round trip.
       renderMyEntries();
     });
   });
+}
+
+function setupDownloadControls(user) {
+  downloadBtn.onclick = async () => {
+    const month = downloadMonth.value;
+    if (!month) {
+      alert("Please choose a month to download.");
+      return;
+    }
+
+    const selectedUid = downloadUser.value || user.uid;
+    const selectedEmail = (downloadUser.value && allUsers.find((u) => u.uid === selectedUid)?.email) || user.email;
+
+    try {
+      let entries;
+      if (selectedUid === user.uid) {
+        entries = myEntriesCache.filter((entry) => entry.date.startsWith(month));
+      } else {
+        entries = await fetchEntriesForMonth(month, selectedUid);
+      }
+
+      if (entries.length === 0) {
+        alert("No entries found for the selected month.");
+        return;
+      }
+
+      const csv = buildCsv(entries);
+      const fileName = `entries-${selectedEmail.replace(/[^a-zA-Z0-9_-]/g, "_")}-${month}.csv`;
+      downloadTextFile(csv, fileName);
+    } catch (err) {
+      console.error("Download failed:", err);
+      alert("Could not load entries for download. If you are downloading another user, make sure your admin role is set correctly.");
+    }
+  };
+}
+
+async function populateAdminUsers() {
+  const usersSnap = await getDocs(collection(db, "users"));
+  allUsers = usersSnap.docs
+    .map((doc) => ({ uid: doc.id, email: doc.data().email }))
+    .filter((user) => user.email)
+    .sort((a, b) => a.email.localeCompare(b.email));
+  downloadUser.innerHTML = `<option value="">Current user</option>` + allUsers.map((user) => `<option value="${escapeAttr(user.uid)}">${escapeHtml(user.email)}</option>`).join("");
+}
+
+async function fetchEntriesForMonth(month, uid) {
+  const [year, mon] = month.split("-").map(Number);
+  const monthStart = `${year}-${String(mon).padStart(2, "0")}-01`;
+  const monthEnd = `${year}-${String(mon).padStart(2, "0")}-31`;
+
+  const q = query(
+    collection(db, "entries"),
+    where("uid", "==", uid)
+  );
+
+  const snapshot = await getDocs(q);
+  return snapshot.docs
+    .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+    .filter((entry) => entry.date >= monthStart && entry.date <= monthEnd)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+function buildCsv(entries) {
+  const header = ["Date", "Start", "End", "Breaks (min)", "Hours", "Activity"];
+  const rows = entries.map((e) => [
+    e.date,
+    e.start || "",
+    e.end || "",
+    e.breaks || 0,
+    formatHours(e.hours || 0),
+    e.activity || "",
+  ]);
+
+  const activityTotals = entries.reduce((totals, entry) => {
+    const name = (entry.activity || "").trim();
+    if (!name) return totals;
+    totals[name] = (totals[name] || 0) + Number(entry.hours || 0);
+    return totals;
+  }, {});
+
+  const totalsRows = Object.keys(activityTotals)
+    .sort()
+    .map((activity) => [activity, formatHours(activityTotals[activity])]);
+
+  const escapeRow = (row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(",");
+  const csvLines = [escapeRow(header), ...rows.map(escapeRow)];
+
+  if (totalsRows.length > 0) {
+    csvLines.push("", escapeRow(["Activity", "Total Hours"]), ...totalsRows.map(escapeRow));
+  }
+
+  return csvLines.join("\n");
+}
+
+function downloadTextFile(text, fileName) {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -318,25 +502,28 @@ function watchAllEntries() {
 
       snap.forEach((docSnap) => {
         const e = docSnap.data();
-        grandTotal += e.hours;
+        grandTotal += Number(e.hours) || 0;
         if (!byUser[e.userEmail]) byUser[e.userEmail] = { total: 0, entries: [] };
-        byUser[e.userEmail].total += e.hours;
+        byUser[e.userEmail].total += Number(e.hours) || 0;
         byUser[e.userEmail].entries.push(e);
       });
 
-      orgTotal.textContent = `${grandTotal} h total`;
+      orgTotal.textContent = `${formatHours(grandTotal)} h total`;
 
       adminByUser.innerHTML = "";
       Object.keys(byUser).sort().forEach((email) => {
         const block = document.createElement("div");
         block.className = "admin-user-block";
         const rows = byUser[email].entries
-          .map((e) => `<tr><td>${e.date}</td><td>${escapeHtml(e.activity)}</td><td>${e.hours}</td></tr>`)
+          .map((e) => {
+            const breaks = Number(e.breaks) || 0;
+            return `<tr><td>${e.date}</td><td>${e.start || "-"}</td><td>${e.end || "-"}</td><td>${breaks} min</td><td>${formatHours(e.hours || 0)}</td><td>${escapeHtml(e.activity || "")}</td></tr>`;
+          })
           .join("");
         block.innerHTML = `
-          <h3>${email} <span class="sub-total">${byUser[email].total} h</span></h3>
+          <h3>${email} <span class="sub-total">${formatHours(byUser[email].total)} h</span></h3>
           <table class="entries-table">
-            <thead><tr><th>Date</th><th>Activity</th><th>Hours</th></tr></thead>
+            <thead><tr><th>Date</th><th>Start</th><th>End</th><th>Breaks</th><th>Hours</th><th>Activity</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         `;
@@ -352,6 +539,58 @@ function watchAllEntries() {
 // ─────────────────────────────────────────────────────────────
 // 9. Small helpers
 // ─────────────────────────────────────────────────────────────
+function computeWorkedHours(start, end, breaks) {
+  if (!start || !end) return 0;
+
+  const [startHours, startMinutes] = start.split(":").map(Number);
+  const [endHours, endMinutes] = end.split(":").map(Number);
+  const startDate = new Date(0, 0, 0, startHours, startMinutes);
+  let endDate = new Date(0, 0, 0, endHours, endMinutes);
+
+  if (endDate <= startDate) {
+    endDate = new Date(0, 0, 1, endHours, endMinutes);
+  }
+
+  const diffMinutes = (endDate - startDate) / 60000 - (breaks || 0);
+  return Math.max(0, Math.round((diffMinutes / 60) * 100) / 100);
+}
+
+function formatHours(hours) {
+  return Number(hours).toFixed(2).replace(/\.00$/, "");
+}
+
+function parseFlexibleTime(value) {
+  if (!value) return null;
+  const normalized = value.trim().replace(",", ".");
+  const integerOnly = /^\d{1,2}$/;
+  const colonTime = /^(\d{1,2}):(\d{1,2})$/;
+  const decimalTime = /^(\d{1,2})\.(\d+)$/;
+
+  if (integerOnly.test(normalized)) {
+    return `${normalized.padStart(2, "0")}:00`;
+  }
+
+  const colonMatch = normalized.match(colonTime);
+  if (colonMatch) {
+    const hours = Number(colonMatch[1]);
+    const minutes = Number(colonMatch[2]);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+
+  const decimalMatch = normalized.match(decimalTime);
+  if (decimalMatch) {
+    const hours = Number(decimalMatch[1]);
+    const fraction = Number(`0.${decimalMatch[2]}`);
+    if (hours < 0 || hours > 23 || fraction < 0 || fraction >= 1) return null;
+    const minutes = Math.round(fraction * 60);
+    if (minutes >= 60) return null;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
