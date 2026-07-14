@@ -94,6 +94,16 @@ let allUsers = [];
 // default the date field to today
 entryDate.valueAsDate = new Date();
 
+// default the download month picker to the current month (YYYY-MM)
+try {
+  const now = new Date();
+  if (downloadMonth) {
+    downloadMonth.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }
+} catch (err) {
+  console.warn("Could not set default download month:", err);
+}
+
 // ─────────────────────────────────────────────────────────────
 // 4. Auth: sign up / log in toggle + submit
 // ─────────────────────────────────────────────────────────────

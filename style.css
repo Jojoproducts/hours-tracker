@@ -311,3 +311,22 @@ input:focus {
 
   .admin-user-block h3 { font-size: 0.95rem; }
 }
+
+/* Hide date, breaks and hours on very small screens per request */
+@media (max-width: 420px) {
+  /* hide form labels for date and breaks by targeting their inputs' parent labels */
+  label > #entryDate,
+  label > #entryBreaks {
+    display: none;
+  }
+
+  /* hide table columns: Date (1), Breaks (4), Hours (5) */
+  .entries-table th.col-date,
+  .entries-table td:nth-child(1),
+  .entries-table th.col-breaks,
+  .entries-table td:nth-child(4),
+  .entries-table th.col-hours,
+  .entries-table td:nth-child(5) {
+    display: none;
+  }
+}
